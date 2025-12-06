@@ -8,7 +8,7 @@ import { formatTime, formatDate } from './utils/audioUtils';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 
 // [중요] storageService에서 필요한 함수들 import (getAllRecordings 포함)
-import { saveRecording, deleteAudio, getAudio, getAllRecordings } from './services/storageService';
+import { saveRecording, deleteAudio, getAudio, getAllRecordings, updateRecording } from './services/storageService';
 
 // Mock UUID generator (임시 ID 생성용)
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -224,20 +224,34 @@ function App() {
     setIsDropdownOpen(false); 
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editingId) return;
     // 참고: 수정 기능도 백엔드 API(PUT/PATCH)가 필요하지만, 
     // 우선 프론트엔드 상태만 변경하고 나중에 백엔드 API 추가 시 연결합니다.
-    setRecordings(prev => prev.map(rec => 
+    try{
+      // 백엔드에 수정 요청 전송
+      await updateRecording(editingId, editTitle, editSubject);
+
+      // 성공 시 프론트엔드 목록 업데이트(화면 갱신)
+      setRecordings(prev => prev.map(rec => 
       rec.id === editingId 
         ? { ...rec, title: editTitle, subject: editSubject.trim() || '기타' }
         : rec
-    ));
-    setEditingId(null);
-    
-    if (editSubject && !expandedFolders.has(editSubject)) {
+      ));
+
+      // 폴더 목록 갱신 로직 (기존 유지)
+      if (editSubject && !expandedFolders.has(editSubject)) {
       setExpandedFolders(prev => new Set(prev).add(editSubject));
+      }
+
+      setEditingId(null); //모달 닫기
+
     }
+    catch(error){
+      console.error("수정 실패:", error);
+      alert("강의 정보 수정에 실패했습니다.");
+    }
+    
   };
 
   // --- Import Logic ---

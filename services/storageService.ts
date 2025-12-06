@@ -83,3 +83,23 @@ export const getAudio = async (id: string): Promise<Blob> => {
   }
   return await response.blob();
 };
+
+
+// 7. 녹음 정보 업데이트 (제목, 과목 등)
+export const updateRecording = async (
+  id: string,
+  title: string,
+  subject: string
+): Promise<void> => {
+  const response = await fetch(`${API_BASE_URL}/${id}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ title, subject }),
+  });
+
+  if (!response.ok) {
+    throw new Error('업데이트 실패');
+  }
+};
