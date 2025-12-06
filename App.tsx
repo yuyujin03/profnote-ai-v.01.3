@@ -5,38 +5,17 @@ import NoteDetail from './components/NoteDetail';
 import { Recording, NoteData } from './types';
 import { analyzeLectureAudio } from './services/geminiService';
 import { formatTime, formatDate } from './utils/audioUtils';
-//import { saveAudio, deleteAudio, getAudio } from './services/storageService';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 
-// [변경 후] saveAudio를 saveRecording으로 바꿔주세요
-import { saveRecording, deleteAudio, getAudio } from './services/storageService';
+// [중요] storageService에서 필요한 함수들 import (getAllRecordings 포함)
+import { saveRecording, deleteAudio, getAudio, getAllRecordings } from './services/storageService';
 
-// Mock UUID if uuid package isn't available
+// Mock UUID generator (임시 ID 생성용)
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
 function App() {
-  const [recordings, setRecordings] = useState<Recording[]>(() => {
-    if (typeof window === 'undefined') return [];
-    
-    const savedData = localStorage.getItem('profnote-recordings');
-    if (savedData) {
-      try {
-        const parsedData = JSON.parse(savedData);
-        return parsedData.map((item: any) => ({
-          ...item,
-          subject: item.subject || '기타', // Migration for old data
-          date: new Date(item.date),
-          status: item.status === 'processing' ? 'error' : item.status,
-          errorMessage: item.status === 'processing' ? '녹음 처리 중 페이지가 새로고침되어 중단되었습니다.' : item.errorMessage,
-          audioBlob: undefined // Explicitly set to undefined to avoid {} from localStorage
-        }));
-      } catch (error) {
-        console.error("Failed to load recordings from storage:", error);
-        return [];
-      }
-    }
-    return [];
-  });
+  // 1. [변경] LocalStorage 초기화 로직 제거 -> 빈 배열로 시작
+  const [recordings, setRecordings] = useState<Recording[]>([]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<'home' | 'recording'>('home');
@@ -58,6 +37,33 @@ function App() {
   // Expanded Folders State (Default all open)
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['기타']));
 
+  // 2. [추가] 컴포넌트 마운트 시 백엔드에서 데이터 불러오기
+  useEffect(() => {
+    loadRecordings();
+  }, []);
+
+  const loadRecordings = async () => {
+    try {
+      const data = await getAllRecordings();
+      // 백엔드 데이터(날짜 문자열)를 Date 객체로 변환
+      const formattedData = data.map((item: any) => ({
+        ...item,
+        data:item.noteData,
+
+        date: new Date(item.date),
+        // 오디오 Blob은 목록에서는 필요 없으므로 undefined (상세보기 시 로드됨)
+        audioBlob: undefined 
+      }));
+      // 날짜 최신순 정렬
+      formattedData.sort((a: any, b: any) => b.date.getTime() - a.date.getTime());
+      setRecordings(formattedData);
+    } catch (error) {
+      console.error("목록 불러오기 실패:", error);
+    }
+  };
+
+  // [삭제됨] LocalStorage 저장용 useEffect는 제거했습니다.
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -76,89 +82,71 @@ function App() {
   }, [isDropdownOpen]);
 
   // --- Logic for Recording ---
-  // We lift the state up so recording continues even if view changes
+  // 3. [변경] 녹음 완료 처리 로직 (임시 상태 표시 -> 분석 -> 저장 -> 목록 갱신)
   const handleRecordingCompleteCallback = async (blob: Blob, duration: number) => {
-    const newId = generateId();
+    setView('home');
+
+    // 로딩 표시를 위한 임시 데이터 추가 (ID는 임시로 생성)
+    const tempId = "temp-" + Date.now();
     const newRecording: Recording = {
-      id: newId,
-      title: `강의 녹음 ${recordings.length + 1}`,
-      subject: '기타', // Default folder
+      id: tempId,
+      title: "새로운 강의 분석 중...",
+      subject: "기타",
       date: new Date(),
       duration,
-      audioBlob: blob, // In-memory
+      audioBlob: blob,
       status: 'processing',
     };
 
+    // 임시 데이터를 목록에 추가하여 "분석 중" 상태 보여줌
     setRecordings(prev => [newRecording, ...prev]);
-    setView('home');
-
-
-    setRecordings(prev => [newRecording, ...prev]);
-    setView('home');
-
-
-    // // Persist audio to IndexedDB 몽고DB 사용으로 인한 주석처리
-    // try {
-    //   await saveAudio(newId, blob);
-    // } catch (error) {
-    //   console.error("Failed to save audio to storage:", error);
-    // }
     
-    processAnalysis(newId, blob);
+    // 분석 및 저장 프로세스 시작
+    processAnalysis(tempId, blob, duration);
   };
 
-  const processAnalysis = async (id: string, blob: Blob) => {
+  const processAnalysis = async (tempId: string, blob: Blob, duration: number) => {
     try {
+      // (1) Gemini 분석 수행
       const result = await analyzeLectureAudio(blob);
       
-      // 1. 제목을 먼저 확정합니다 (변수로 저장)
-      // extractTitle 함수를 실행해서 나온 결과값(String)을 씁니다.
-      const generatedTitle = extractTitle(result.summary) || `강의 녹음 ${recordings.length + 1}`;
+      // (2) 제목 확정
+      const generatedTitle = extractTitle(result.summary) || `강의 녹음 ${new Date().toLocaleTimeString()}`;
 
-      // 2. 화면 목록 업데이트 (확정된 제목 사용)
-      setRecordings(prev => prev.map(rec => 
-        rec.id === id 
-          ? { ...rec, status: 'completed', data: result, title: generatedTitle } 
-          : rec
-      ));
-
-      // 3. 백엔드 서버 저장 (확정된 제목 사용)
-      try {
-        console.log("백엔드 저장을 시작합니다...");
-        await saveRecording(
-          generatedTitle,  // ✅ 수정됨: 위에서 만든 제목 변수 사용
-          '기타',          // 과목
-          blob,           // 오디오 파일
-          result          // 결과 데이터
-        );
-        console.log("✅ 백엔드 저장 성공!");
-      } catch (saveError) {
-        console.error("❌ 백엔드 저장 실패:", saveError);
-        alert("분석은 완료되었으나 서버 저장에 실패했습니다.");
-      }
+      // (3) 백엔드에 저장 (오디오 + 분석결과 한번에 전송)
+      console.log("백엔드 저장 시작...");
+      await saveRecording(
+        generatedTitle, 
+        '기타', 
+        blob, 
+        result
+      );
+      
+      // (4) [핵심] 저장 완료 후 백엔드에서 '진짜 데이터'를 다시 받아와 목록 갱신
+      // 이렇게 하면 임시 데이터(tempId)는 사라지고, DB의 실제 데이터(ObjectId)로 교체됩니다.
+      await loadRecordings(); 
+      console.log("✅ 저장 및 목록 갱신 완료");
 
     } catch (error) {
-      console.error(error);
+      console.error("분석/저장 실패:", error);
+      // 에러 발생 시 해당 임시 항목을 에러 상태로 변경
       setRecordings(prev => prev.map(rec => 
-        rec.id === id 
-          ? { ...rec, status: 'error', errorMessage: 'AI 분석 중 오류가 발생했습니다.' } 
+        rec.id === tempId 
+          ? { ...rec, status: 'error', errorMessage: 'AI 분석 또는 저장 실패' } 
           : rec
       ));
     }
   };
 
-  
-
   const handleRetryAnalysis = async (id: string) => {
+    // 재시도 로직: 필요하다면 백엔드 재전송 로직으로 수정 필요하지만, 
+    // 현재는 기존 로직 유지 (오디오가 메모리에 있다면 재시도)
     const recording = recordings.find(r => r.id === id);
     if (!recording) return;
 
-    // Set status to processing
     setRecordings(prev => prev.map(r => r.id === id ? { ...r, status: 'processing', errorMessage: undefined } : r));
 
     try {
-      // Try to get audio from memory or DB
-      // IMPORTANT: Check if audioBlob is actually a Blob instance (not {})
       let blob = (recording.audioBlob instanceof Blob) ? recording.audioBlob : undefined;
       
       if (!blob) {
@@ -166,13 +154,16 @@ function App() {
       }
 
       if (blob && blob instanceof Blob) {
-        await processAnalysis(id, blob);
+        // 재시도 시에는 임시 ID가 아닌 실제 ID를 사용하므로 로직 분리가 필요할 수 있으나,
+        // 간단하게 처리하기 위해 여기서는 재분석만 수행 (저장은 별도 처리 필요할 수 있음)
+        // 일단 UI 흐름상 다시 processAnalysis를 타도록 유도
+        await processAnalysis(id, blob, recording.duration);
       } else {
         throw new Error("오디오 파일을 찾을 수 없습니다.");
       }
     } catch (error) {
       console.error("Retry failed:", error);
-      setRecordings(prev => prev.map(r => r.id === id ? { ...r, status: 'error', errorMessage: '오디오 파일을 불러올 수 없어 분석에 실패했습니다.' } : r));
+      setRecordings(prev => prev.map(r => r.id === id ? { ...r, status: 'error', errorMessage: '재시도 실패' } : r));
     }
   };
 
@@ -197,31 +188,28 @@ function App() {
     // Initial expansion of all folders found in data
     const subjects = new Set(recordings.map(r => r.subject));
     setExpandedFolders(subjects);
-  }, []); 
+  }, [recordings]); // recordings가 바뀔 때마다 폴더 목록 갱신
 
-  useEffect(() => {
-    // Strip audioBlob before saving to localStorage to prevent {} issues
-    const dataToSave = recordings.map(rec => {
-      const { audioBlob, ...rest } = rec;
-      return rest;
-    });
-    localStorage.setItem('profnote-recordings', JSON.stringify(dataToSave));
-  }, [recordings]);
-
+  // 4. [변경] 삭제 기능 (백엔드 연동)
   const deleteRecording = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     e.preventDefault();
     e.nativeEvent.stopImmediatePropagation();
     
     if (window.confirm('정말 이 강의 노트를 삭제하시겠습니까? 복구할 수 없습니다.')) {
-      setRecordings(prev => prev.filter(r => r.id !== id));
-      if (selectedId === id) {
-        setSelectedId(null);
-      }
       try {
+        // (1) 백엔드에 삭제 요청
         await deleteAudio(id);
+        
+        // (2) 성공 시 화면 목록에서 제거
+        setRecordings(prev => prev.filter(r => r.id !== id));
+        
+        if (selectedId === id) {
+          setSelectedId(null);
+        }
       } catch (error) {
-        console.error("Failed to delete audio from storage:", error);
+        console.error("삭제 실패:", error);
+        alert("삭제 중 오류가 발생했습니다.");
       }
     }
   };
@@ -233,11 +221,13 @@ function App() {
     setEditingId(rec.id);
     setEditTitle(rec.title);
     setEditSubject(rec.subject);
-    setIsDropdownOpen(false); // Reset dropdown state
+    setIsDropdownOpen(false); 
   };
 
   const saveEdit = () => {
     if (!editingId) return;
+    // 참고: 수정 기능도 백엔드 API(PUT/PATCH)가 필요하지만, 
+    // 우선 프론트엔드 상태만 변경하고 나중에 백엔드 API 추가 시 연결합니다.
     setRecordings(prev => prev.map(rec => 
       rec.id === editingId 
         ? { ...rec, title: editTitle, subject: editSubject.trim() || '기타' }
@@ -255,7 +245,6 @@ function App() {
     try {
       const titleMatch = content.match(/^# (.*)$/m);
       const subjectMatch = content.match(/^과목: (.*)$/m);
-      // Date format varies, keeping it simple or current date if parsing fails
       
       const summaryMatch = content.match(/## 📌 핵심 요약\n([\s\S]*?)(?=\n##)/);
       const termsMatch = content.match(/## 🔑 주요 용어\n([\s\S]*?)(?=\n##)/);
@@ -289,14 +278,12 @@ function App() {
   };
 
   const handleImport = async () => {
-    // Modified: Logic to allow import if either audio OR md file exists
     if (!importAudioFile && !importMdFile) return;
     setIsImporting(true);
 
     try {
-      const newId = generateId();
+      const newId = generateId(); // 임시 ID
       
-      // Determine initial title based on available file
       let initialTitle = "가져온 강의";
       if (importAudioFile) {
         initialTitle = importAudioFile.name.replace(/\.[^/.]+$/, "");
@@ -310,29 +297,28 @@ function App() {
         subject: '기타',
         date: new Date(),
         duration: 0,
-        // audioBlob: undefined initially
         status: 'recorded', 
       };
 
       // 1. Handle Audio File
       if (importAudioFile) {
         newRecording.audioBlob = importAudioFile;
-        // Get audio duration
         const audioEl = new Audio(URL.createObjectURL(importAudioFile));
         await new Promise((resolve) => {
           audioEl.onloadedmetadata = () => {
             newRecording.duration = audioEl.duration;
             resolve(null);
           };
-          audioEl.onerror = () => resolve(null); // Continue even if duration fails
+          audioEl.onerror = () => resolve(null);
         });
 
-        // Save to IndexedDB
-        // await saveRecording(newId, importAudioFile);
-        console.log("임시: 가져오기 파일은 아직 서버에 저장되지 않습니다.");
+        // [중요] 가져오기 기능도 백엔드 API가 필요하지만, 
+        // 현재 API 구조상 분석 데이터가 필수라 에러가 날 수 있으므로 주석 처리합니다.
+        // 추후 '파일만 업로드' 하는 API를 만들어서 연결해야 합니다.
+        // await saveRecording(newId, importAudioFile); 
+        console.log("ℹ️ 임시: 가져오기 파일은 아직 서버에 저장되지 않습니다. (API 수정 필요)");
       } else {
-        // No audio file provided
-        newRecording.status = 'completed'; // If only MD is provided, assume completed (since we can't record/analyze)
+        newRecording.status = 'completed'; 
       }
 
       // 2. Handle Markdown File
@@ -350,7 +336,6 @@ function App() {
 
       setRecordings(prev => [newRecording, ...prev]);
       
-      // Update folders if needed
       if (newRecording.subject && !expandedFolders.has(newRecording.subject)) {
         setExpandedFolders(prev => new Set(prev).add(newRecording.subject));
       }
@@ -464,7 +449,7 @@ function App() {
                     {subjectRecordings.map((rec, index, array) => {
                       const currentMonth = getMonthLabel(rec.date);
                       const prevMonth = index > 0 ? getMonthLabel(array[index - 1].date) : null;
-                      // Show header if it's the first item OR if month changed from previous item (since we are iterating descending)
+                      // Show header if it's the first item OR if month changed from previous item
                       const showHeader = index === 0 || currentMonth !== prevMonth;
 
                       return (
@@ -479,7 +464,6 @@ function App() {
                           <div className="relative group pr-2">
                             <button
                               onClick={() => {
-                                // Allow opening even if error or processing, to show status/retry
                                 setSelectedId(rec.id);
                                 setView('home');
                               }}
