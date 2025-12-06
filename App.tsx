@@ -8,7 +8,7 @@ import { formatTime, formatDate } from './utils/audioUtils';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 
 // [중요] storageService에서 필요한 함수들 import (getAllRecordings 포함)
-import { saveRecording, deleteAudio, getAudio, getAllRecordings, updateRecording } from './services/storageService';
+import { saveRecording, deleteAudio, getAudio, getAllRecordings, updateRecording, importRecording } from './services/storageService';
 
 // Mock UUID generator (임시 ID 생성용)
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -292,76 +292,59 @@ function App() {
   };
 
   const handleImport = async () => {
+    // 파일이 하나라도 없으면 함수 종료
     if (!importAudioFile && !importMdFile) return;
-    setIsImporting(true);
+    
+    setIsImporting(true); // 로딩 시작
 
     try {
-      const newId = generateId(); // 임시 ID
-      
+      // 1. 제목 및 데이터 준비
       let initialTitle = "가져온 강의";
-      if (importAudioFile) {
-        initialTitle = importAudioFile.name.replace(/\.[^/.]+$/, "");
-      } else if (importMdFile) {
-        initialTitle = importMdFile.name.replace(/\.[^/.]+$/, "");
-      }
+      // 파일 이름에서 확장자(.mp3, .md 등) 제거하여 제목으로 사용
+      if (importAudioFile) initialTitle = importAudioFile.name.replace(/\.[^/.]+$/, "");
+      else if (importMdFile) initialTitle = importMdFile.name.replace(/\.[^/.]+$/, "");
 
-      let newRecording: Recording = {
-        id: newId,
-        title: initialTitle,
-        subject: '기타',
-        date: new Date(),
-        duration: 0,
-        status: 'recorded', 
-      };
+      // 노트 데이터 파싱 (있으면)
+      let parsedNoteData: NoteData | null = null;
+      let subject = '기타';
 
-      // 1. Handle Audio File
-      if (importAudioFile) {
-        newRecording.audioBlob = importAudioFile;
-        const audioEl = new Audio(URL.createObjectURL(importAudioFile));
-        await new Promise((resolve) => {
-          audioEl.onloadedmetadata = () => {
-            newRecording.duration = audioEl.duration;
-            resolve(null);
-          };
-          audioEl.onerror = () => resolve(null);
-        });
-
-        // [중요] 가져오기 기능도 백엔드 API가 필요하지만, 
-        // 현재 API 구조상 분석 데이터가 필수라 에러가 날 수 있으므로 주석 처리합니다.
-        // 추후 '파일만 업로드' 하는 API를 만들어서 연결해야 합니다.
-        // await saveRecording(newId, importAudioFile); 
-        console.log("ℹ️ 임시: 가져오기 파일은 아직 서버에 저장되지 않습니다. (API 수정 필요)");
-      } else {
-        newRecording.status = 'completed'; 
-      }
-
-      // 2. Handle Markdown File
       if (importMdFile) {
         const text = await importMdFile.text();
         const parsed = parseMarkdownContent(text);
-        
         if (parsed) {
-          newRecording.title = parsed.meta.title || newRecording.title;
-          newRecording.subject = parsed.meta.subject || newRecording.subject;
-          newRecording.data = parsed.data;
-          newRecording.status = 'completed';
+          parsedNoteData = parsed.data;
+          // 마크다운 안에 제목/과목이 있으면 그걸 우선 사용
+          if (parsed.meta.title) initialTitle = parsed.meta.title;
+          if (parsed.meta.subject) subject = parsed.meta.subject;
         }
       }
 
-      setRecordings(prev => [newRecording, ...prev]);
-      
-      if (newRecording.subject && !expandedFolders.has(newRecording.subject)) {
-        setExpandedFolders(prev => new Set(prev).add(newRecording.subject));
-      }
+      // 2. [핵심] 백엔드 Import API 호출
+      // 오디오만 있든, 노트만 있든, 둘 다 있든 알아서 처리됩니다.
+      console.log("파일 업로드 시작...");
+      await importRecording(
+        initialTitle,
+        subject,
+        importAudioFile, // 파일 객체 (없으면 null)
+        parsedNoteData   // 노트 데이터 객체 (없으면 null)
+      );
 
+      // 3. 목록 갱신 (DB에서 최신 데이터 받아오기)
+      // loadRecordings 함수가 App 컴포넌트에 정의되어 있어야 합니다.
+      await loadRecordings(); 
+      
+      // 모달 닫기 및 초기화
       setIsImportModalOpen(false);
       setImportAudioFile(null);
       setImportMdFile(null);
+      
+      alert("파일을 성공적으로 가져왔습니다!");
+
     } catch (error) {
       console.error("Import failed:", error);
       alert("파일 가져오기에 실패했습니다.");
     } finally {
-      setIsImporting(false);
+      setIsImporting(false); // 로딩 끝
     }
   };
 

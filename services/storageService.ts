@@ -103,3 +103,34 @@ export const updateRecording = async (
     throw new Error('업데이트 실패');
   }
 };
+
+// 8. 파일 가져오기 (Import)
+export const importRecording = async (
+  title: string,
+  subject: string,
+  audioFile: File | null,
+  noteData: NoteData | null
+): Promise<void> => {
+  const formData = new FormData();
+  formData.append('title', title);
+  formData.append('subject', subject);
+  
+  // 파일이 있을 때만 추가
+  if (audioFile) {
+    formData.append('file', audioFile);
+  }
+  
+  // 노트 데이터가 있을 때만 추가
+  if (noteData) {
+    formData.append('noteData', JSON.stringify(noteData));
+  }
+
+  const response = await fetch(`${API_BASE_URL}/import`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error('파일 가져오기 실패');
+  }
+};
