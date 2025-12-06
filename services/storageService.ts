@@ -134,3 +134,18 @@ export const importRecording = async (
     throw new Error('파일 가져오기 실패');
   }
 };
+
+// 9. 분석 결과만 업데이트 (기존 파일에 요약본 추가)
+export const updateAnalysis = async (id: string, noteData: NoteData): Promise<void> => {
+  const response = await fetch(`${API_BASE_URL}/${id}/analysis`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(noteData),
+  });
+
+  if (!response.ok) {
+    throw new Error('분석 결과 저장 실패');
+  }
+};

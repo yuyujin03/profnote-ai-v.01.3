@@ -8,7 +8,7 @@ import { formatTime, formatDate } from './utils/audioUtils';
 import { useAudioRecorder } from './hooks/useAudioRecorder';
 
 // [중요] storageService에서 필요한 함수들 import (getAllRecordings 포함)
-import { saveRecording, deleteAudio, getAudio, getAllRecordings, updateRecording, importRecording } from './services/storageService';
+import { saveRecording, deleteAudio, getAudio, getAllRecordings, updateRecording, importRecording, updateAnalysis } from './services/storageService';
 
 // Mock UUID generator (임시 ID 생성용)
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -109,18 +109,39 @@ function App() {
     try {
       // (1) Gemini 분석 수행
       const result = await analyzeLectureAudio(blob);
-      
-      // (2) 제목 확정
-      const generatedTitle = extractTitle(result.summary) || `강의 녹음 ${new Date().toLocaleTimeString()}`;
 
-      // (3) 백엔드에 저장 (오디오 + 분석결과 한번에 전송)
-      console.log("백엔드 저장 시작...");
-      await saveRecording(
-        generatedTitle, 
-        '기타', 
-        blob, 
-        result
-      );
+      // 2. ID가 'temp-'로 시작하는지 확인 (임시 ID인가?)
+      const isNewRecording = tempId.startsWith('temp-'); 
+      
+      // // (2) 제목 확정
+      // const generatedTitle = extractTitle(result.summary) || `강의 녹음 ${new Date().toLocaleTimeString()}`;
+
+      // // (3) 백엔드에 저장 (오디오 + 분석결과 한번에 전송)
+      // console.log("백엔드 저장 시작...");
+      // await saveRecording(
+      //   generatedTitle, 
+      //   '기타', 
+      //   blob, 
+      //   result
+      // );
+
+      if (isNewRecording) { // 3. 파일 생성
+        // [새 녹음일 경우] -> 새로 저장 (POST)
+        console.log("새 녹음 저장 중...");
+        const generatedTitle = extractTitle(result.summary) || `강의 녹음 ${new Date().toLocaleTimeString()}`;
+        
+        await saveRecording(
+          generatedTitle, 
+          '기타', 
+          blob, 
+          result
+        );
+      } else {
+        // [이미 있는 파일일 경우] -> 내용만 업데이트 (PUT)
+        console.log("기존 파일에 분석 결과 업데이트 중...");
+        await updateAnalysis(tempId, result);
+      }
+
       
       // (4) [핵심] 저장 완료 후 백엔드에서 '진짜 데이터'를 다시 받아와 목록 갱신
       // 이렇게 하면 임시 데이터(tempId)는 사라지고, DB의 실제 데이터(ObjectId)로 교체됩니다.
@@ -346,6 +367,13 @@ function App() {
     } finally {
       setIsImporting(false); // 로딩 끝
     }
+  };
+
+  // 모달 닫기 및 파일 초기화 함수
+  const closeImportModal = () => {
+    setImportAudioFile(null); // 오디오 파일 비우기
+    setImportMdFile(null);    // 노트 파일 비우기
+    setIsImportModalOpen(false); // 모달 닫기
   };
 
   const toggleFolder = (subject: string) => {
@@ -711,13 +739,16 @@ function App() {
                 <Upload size={24} className="text-indigo-600" />
                 <h3 className="text-lg font-bold text-slate-900">파일 가져오기</h3>
               </div>
-              <button onClick={() => setIsImportModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button 
+                onClick={closeImportModal} 
+                className="text-slate-400 hover:text-slate-600"
+              >
                 <X size={20} />
               </button>
             </div>
             
             <p className="text-slate-500 text-sm mb-6">
-              녹음 파일(필수)과 기존 노트 파일(선택)을 업로드하여 목록에 추가합니다.
+              녹음 파일과 기존 노트 파일을 업로드하여 목록에 추가합니다. (하나만 업로드해도 무방합니다)
             </p>
             
             <div className="space-y-4">
@@ -783,7 +814,7 @@ function App() {
 
             <div className="flex gap-3 mt-8">
               <button 
-                onClick={() => setIsImportModalOpen(false)}
+                onClick={closeImportModal}
                 className="flex-1 px-4 py-2 text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors"
                 disabled={isImporting}
               >
