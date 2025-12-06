@@ -1,8 +1,9 @@
 // services/storageService.ts
 import { NoteData } from '../types'; // types.ts 경로에 맞춰 수정해주세요
+window.location.hostname
 
 // 백엔드 주소 (Vite 프록시를 안 쓸 경우 직접 지정)
-const API_BASE_URL = 'http://localhost:8080/api/recordings';
+const API_BASE_URL = `http://${window.location.hostname}:8080/api/recordings`;
 
 // 1. 녹음 파일과 결과 저장 (백엔드로 전송)
 // 기존 saveAudio 함수를 대체합니다. 이제 제목, 과목, 분석데이터를 함께 보냅니다.
